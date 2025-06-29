@@ -34,8 +34,13 @@ class StartEndDataset_audio(Dataset):
         self.dset_name = dset_name
         self.data_path = data_path
         self.data_ratio = data_ratio
-        self.v_feat_dirs = v_feat_dirs \
-            if isinstance(v_feat_dirs, list) else [v_feat_dirs]
+        # v_feat_dirs 처리: 빈 문자열이나 None 값들을 필터링
+        if isinstance(v_feat_dirs, list):
+            self.v_feat_dirs = [d for d in v_feat_dirs if d and d.strip()]
+        elif v_feat_dirs and v_feat_dirs.strip():
+            self.v_feat_dirs = [v_feat_dirs]
+        else:
+            self.v_feat_dirs = []
         self.q_feat_dir = q_feat_dir
         self.a_feat_dir = a_feat_dir
 
@@ -44,7 +49,8 @@ class StartEndDataset_audio(Dataset):
         self.max_v_l = max_v_l
         self.ctx_mode = ctx_mode
         self.use_tef = "tef" in ctx_mode
-        self.use_video = "video" in ctx_mode
+        self.use_video = "video" in ctx_mode and len(self.v_feat_dirs) > 0  # video feature가 실제로 있을 때만 사용
+        self.use_audio = "audio" in ctx_mode  # audio 사용 여부 플래그 추가
         self.normalize_t = normalize_t
         self.normalize_v = normalize_v
         self.load_labels = load_labels
@@ -90,32 +96,45 @@ class StartEndDataset_audio(Dataset):
 
         model_inputs = dict()
         model_inputs["query_feat"] = self._get_query_feat_by_qid(meta["qid"])  # (Dq, ) or (Lq, Dq)
+        
+        # 비디오 특성 로드 (use_video가 True일 때만)
         if self.use_video:
             model_inputs["video_feat"] = self._get_video_feat_by_vid(meta["vid"])  # (Lv, Dv)
             ctx_l = len(model_inputs["video_feat"])
         else:
             ctx_l = self.max_v_l
+            
+        # 오디오 특성 로드 (a_feat_dir이 설정되어 있을 때만)
         if self.a_feat_dir is not None:
             model_inputs["audio_feat"] = self._get_audio_feat_by_vid(meta["vid"])  # (Lv, Da) 75 2048
             ctx_l_a = len(model_inputs["audio_feat"])
-            if ctx_l_a < ctx_l:
+            
+            # audio-only 모드인 경우 audio 길이를 사용
+            if not self.use_video:
                 ctx_l = ctx_l_a
-            model_inputs["video_feat"] = model_inputs["video_feat"][:ctx_l]
+            else:
+                # video+audio 모드인 경우 둘 중 짧은 길이 사용
+                if ctx_l_a < ctx_l:
+                    ctx_l = ctx_l_a
+                model_inputs["video_feat"] = model_inputs["video_feat"][:ctx_l]
+            
             model_inputs["audio_feat"] = model_inputs["audio_feat"][:ctx_l]
 
         if self.use_tef:
             tef_st = torch.arange(0, ctx_l, 1.0) / ctx_l
             tef_ed = tef_st + 1.0 / ctx_l
             tef = torch.stack([tef_st, tef_ed], dim=1)  # (Lv, 2)
-            # print(tef.shape, model_inputs['video_feat'].shape, model_inputs['audio_feat'].shape)
+            
             if self.use_video:
                 model_inputs["video_feat"] = torch.cat(
                     [model_inputs["video_feat"], tef], dim=1)  # (Lv, Dv+2)
-            else:
+            elif not self.use_video and self.a_feat_dir is None:
+                # video도 audio도 없는 경우 tef만 사용
                 model_inputs["video_feat"] = tef
+                
             if self.a_feat_dir is not None:
                 model_inputs["audio_feat"] = torch.cat(
-                    [model_inputs["audio_feat"], tef], dim=1)  # (Lv, Dv+2)
+                    [model_inputs["audio_feat"], tef], dim=1)  # (Lv, Da+2)
 
         if len(model_inputs["query_feat"].shape) == 3:
             # There is batch dimension, which I should have removed at the feature extraction time, but didn't.
@@ -255,7 +274,7 @@ class StartEndDataset_audio(Dataset):
         if add_easy_negative:
             easy_neg_pool = list(set(range(ctx_l)))
             if len(easy_neg_pool) >= max_n:
-                easy_pos_clip_indices = random.sample(rel_clip_ids, k=max_n)
+                easy_pos_clip_indices = random.sample(range(ctx_l), k=max_n)
                 easy_neg_clip_indices = random.sample(easy_neg_pool, k=max_n)
             else:  # copy the hard ones
                 easy_pos_clip_indices = hard_pos_clip_indices
@@ -389,11 +408,15 @@ def prepare_batch_inputs_audio(batched_model_inputs, device, non_blocking=False)
     model_inputs = dict(
         src_txt=batched_model_inputs["query_feat"][0].to(device, non_blocking=non_blocking),
         src_txt_mask=batched_model_inputs["query_feat"][1].to(device, non_blocking=non_blocking),
-        src_vid=batched_model_inputs["video_feat"][0].to(device, non_blocking=non_blocking),
-        src_vid_mask=batched_model_inputs["video_feat"][1].to(device, non_blocking=non_blocking),
         src_aud=batched_model_inputs["audio_feat"][0].to(device, non_blocking=non_blocking),
         src_aud_mask=batched_model_inputs["audio_feat"][1].to(device, non_blocking=non_blocking),
     )
+    
+    # video_feat가 있는 경우에만 추가
+    if "video_feat" in batched_model_inputs:
+        model_inputs["src_vid"] = batched_model_inputs["video_feat"][0].to(device, non_blocking=non_blocking)
+        model_inputs["src_vid_mask"] = batched_model_inputs["video_feat"][1].to(device, non_blocking=non_blocking)
+    
     targets = {}
     if "span_labels" in batched_model_inputs:
         targets["span_labels"] = [

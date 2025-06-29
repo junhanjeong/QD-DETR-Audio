@@ -186,7 +186,7 @@ class BaseOptions(object):
             if opt.exp_id is None:
                 raise ValueError("--exp_id is required for at a training option!")
 
-            ctx_str = opt.ctx_mode + "_sub" if any(["sub_ctx" in p for p in opt.v_feat_dirs]) else opt.ctx_mode
+            ctx_str = opt.ctx_mode + "_sub" if (opt.v_feat_dirs and any(["sub_ctx" in p for p in opt.v_feat_dirs])) else opt.ctx_mode
             opt.results_dir = os.path.join(opt.results_root,
                                            "-".join([opt.dset_name, ctx_str, opt.exp_id,
                                                      time.strftime("%Y_%m_%d_%H_%M_%S")]))
@@ -215,9 +215,17 @@ class BaseOptions(object):
 
         opt.use_tef = "tef" in opt.ctx_mode
         opt.use_video = "video" in opt.ctx_mode
-        if not opt.use_video:
+        
+        # Handle v_feat_dirs for audio-only mode
+        if not hasattr(opt, 'v_feat_dirs') or opt.v_feat_dirs is None:
+            opt.v_feat_dirs = []
+        elif isinstance(opt.v_feat_dirs, list):
+            # Filter out empty strings
+            opt.v_feat_dirs = [d for d in opt.v_feat_dirs if d and d.strip()]
+        
+        if not opt.use_video or not opt.v_feat_dirs:
             opt.v_feat_dim = 0
-        if opt.use_tef:
+        if opt.use_tef and opt.use_video and opt.v_feat_dirs:
             opt.v_feat_dim += 2
 
         self.opt = opt

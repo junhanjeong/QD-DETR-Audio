@@ -87,14 +87,15 @@ class QDDETR(nn.Module):
         self.global_rep_token = torch.nn.Parameter(torch.randn(hidden_dim))
         self.global_rep_pos = torch.nn.Parameter(torch.randn(hidden_dim))
 
-    def forward(self, src_txt, src_txt_mask, src_vid, src_vid_mask, src_aud=None, src_aud_mask=None):
-        """The forward expects two tensors:
+    def forward(self, src_txt, src_txt_mask, src_vid=None, src_vid_mask=None, src_aud=None, src_aud_mask=None):
+        """The forward expects text tensors and either video or audio tensors:
                - src_txt: [batch_size, L_txt, D_txt]
                - src_txt_mask: [batch_size, L_txt], containing 0 on padded pixels,
                     will convert to 1 as padding later for transformer
-               - src_vid: [batch_size, L_vid, D_vid]
-               - src_vid_mask: [batch_size, L_vid], containing 0 on padded pixels,
-                    will convert to 1 as padding later for transformer
+               - src_vid: [batch_size, L_vid, D_vid] (optional for audio-only mode)
+               - src_vid_mask: [batch_size, L_vid] (optional for audio-only mode)
+               - src_aud: [batch_size, L_aud, D_aud] (optional)
+               - src_aud_mask: [batch_size, L_aud] (optional)
 
             It returns a dict with the following elements:
                - "pred_spans": The normalized boxes coordinates for all queries, represented as
@@ -104,8 +105,16 @@ class QDDETR(nn.Module):
                - "aux_outputs": Optional, only returned when auxilary losses are activated. It is a list of
                                 dictionnaries containing the two above keys for each decoder layer.
         """
-        if src_aud is not None:
+        # Handle audio-only mode
+        if src_vid is None and src_aud is not None:
+            # Audio-only mode: use audio as the main feature
+            src_vid = src_aud
+            src_vid_mask = src_aud_mask
+        elif src_vid is not None and src_aud is not None:
+            # Video + Audio mode: concatenate features
             src_vid = torch.cat([src_vid, src_aud], dim=2)
+        elif src_vid is None and src_aud is None:
+            raise ValueError("Either src_vid or src_aud must be provided")
             
         src_vid = self.input_vid_proj(src_vid)
         src_txt = self.input_txt_proj(src_txt)
