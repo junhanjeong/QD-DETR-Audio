@@ -195,7 +195,14 @@ def compute_mr_results(model, eval_loader, opt, epoch_i=None, criterion=None, tb
             pred_spans = outputs["pred_spans"]  # (bsz, #queries, 2)
             _saliency_scores = outputs["saliency_scores"].half()  # (bsz, L)
             saliency_scores = []
-            valid_vid_lengths = model_inputs["src_vid_mask"].sum(1).cpu().tolist()
+            # audio-only 모드에서는 src_aud_mask 사용, 그 외에는 src_vid_mask 사용
+            if "src_vid_mask" in model_inputs:
+                valid_vid_lengths = model_inputs["src_vid_mask"].sum(1).cpu().tolist()
+            elif "src_aud_mask" in model_inputs:
+                valid_vid_lengths = model_inputs["src_aud_mask"].sum(1).cpu().tolist()
+            else:
+                # fallback: 전체 길이 사용
+                valid_vid_lengths = [_saliency_scores.shape[1]] * _saliency_scores.shape[0]
             for j in range(len(valid_vid_lengths)):
                 saliency_scores.append(_saliency_scores[j, :int(valid_vid_lengths[j])].tolist())
         else:
