@@ -200,8 +200,9 @@ def calculate_ap(pred_windows, gt_windows, iou_thresholds=None):
     
     return ap_results
 
+@st.cache_data
 def process_predictions(pred_data, gt_data):
-    """예측 데이터와 실제 데이터를 매칭하고 성능 지표 계산"""
+    """예측 데이터와 실제 데이터를 매칭하고 성능 지표 계산 (캐시됨)"""
     results = []
     
     # GT 데이터를 딕셔너리로 변환
@@ -245,8 +246,9 @@ def process_predictions(pred_data, gt_data):
     
     return results
 
+@st.cache_data
 def compare_models(results1, results2):
-    """두 모델의 결과를 비교"""
+    """두 모델의 결과를 비교 (캐시됨)"""
     # 공통 QID 찾기
     qids1 = {r['qid'] for r in results1}
     qids2 = {r['qid'] for r in results2}
@@ -327,9 +329,32 @@ def get_video_start_time(vid):
             return 0.0
     return 0.0
 
-@st.cache_data
-def translate_text(text, target_language='ko'):
-    """Google Translate를 사용하여 텍스트를 번역"""
+@st.cache_data(ttl=3600)  # 1시간 캐시
+def process_and_compare_models(model1_file, model2_file, gt_file):
+    """모든 모델 처리와 비교를 한 번에 수행 (메인 캐시 함수)"""
+    # 데이터 로드
+    model1_data = load_jsonl_data(model1_file)
+    model2_data = load_jsonl_data(model2_file)
+    gt_data = load_jsonl_data(gt_file)
+    
+    if not model1_data or not model2_data or not gt_data:
+        return None, None, None
+    
+    # 성능 계산
+    results1 = process_predictions(model1_data, gt_data)
+    results2 = process_predictions(model2_data, gt_data)
+    
+    # 모델 비교
+    comparisons = compare_models(results1, results2)
+    
+    # GT 데이터를 딕셔너리로 변환
+    gt_data_dict = {item['qid']: item for item in gt_data}
+    
+    return comparisons, gt_data_dict, len(gt_data)
+
+@st.cache_data(ttl=3600)  # 1시간 캐시
+def translate_text_cached(text, target_language='ko'):
+    """캐시된 번역 함수"""
     try:
         translator = Translator()
         result = translator.translate(text, dest=target_language)
@@ -337,8 +362,9 @@ def translate_text(text, target_language='ko'):
     except Exception as e:
         return f"번역 실패: {text}"
 
+@st.cache_data
 def plot_comparison_visualization(comparison, gt_data_dict, model1_name, model2_name):
-    """모델 비교 시각화"""
+    """모델 비교 시각화 (캐시됨)"""
     qid = comparison['qid']
     gt_data_item = gt_data_dict.get(qid, {})
     
@@ -556,7 +582,7 @@ def display_comparison_item(comparison, idx, model1_name, model2_name, gt_data_d
         
         # 번역된 쿼리
         with st.spinner("번역 중..."):
-            translated_query = translate_text(query, 'ko')
+            translated_query = translate_text_cached(query, 'ko')
         
         st.markdown(f"""
         <div class="query-container">
@@ -805,25 +831,15 @@ def main():
             help="쿼리 내용으로 검색"
         )
     
-    # 데이터 로드
-    with st.spinner("📊 데이터를 로드하고 성능을 계산하는 중..."):
-        model1_data = load_jsonl_data(model1_file)
-        model2_data = load_jsonl_data(model2_file)
-        gt_data = load_jsonl_data(gt_file)
+    # 데이터 로드 및 처리 (캐시됨)
+    with st.spinner("📊 데이터를 로드하고 성능을 계산하는 중... (첫 번째 실행 시에만 시간이 걸립니다)"):
+        result = process_and_compare_models(model1_file, model2_file, gt_file)
         
-        if not model1_data or not model2_data or not gt_data:
+        if result[0] is None:
             st.error("❌ 데이터를 로드할 수 없습니다. 파일 경로를 확인해주세요.")
             return
         
-        # 성능 계산
-        results1 = process_predictions(model1_data, gt_data)
-        results2 = process_predictions(model2_data, gt_data)
-        
-        # 모델 비교
-        comparisons = compare_models(results1, results2)
-        
-        # GT 데이터를 딕셔너리로 변환
-        gt_data_dict = {item['qid']: item for item in gt_data}
+        comparisons, gt_data_dict, total_gt_count = result
     
     if not comparisons:
         st.error("❌ 비교할 데이터가 없습니다.")
@@ -859,22 +875,27 @@ def main():
     with col_similar:
         st.metric("비슷한 성능", f"{similar_count}개")
     
-    # 성능 차이 분포 히스토그램
-    fig_dist = go.Figure()
-    fig_dist.add_trace(
-        go.Histogram(
-            x=[c['ap_diff'] * 100 for c in comparisons], 
-            name="AP@Avg 차이 분포", 
-            nbinsx=30,
-            marker_color='skyblue'
+    # 성능 차이 분포 히스토그램 (캐시됨)
+    @st.cache_data
+    def create_performance_distribution_plot(comparisons_data):
+        fig_dist = go.Figure()
+        fig_dist.add_trace(
+            go.Histogram(
+                x=[c['ap_diff'] * 100 for c in comparisons_data], 
+                name="AP@Avg 차이 분포", 
+                nbinsx=30,
+                marker_color='skyblue'
+            )
         )
-    )
-    fig_dist.update_layout(
-        title="AP@Avg 성능 차이 분포 (Model1 - Model2)",
-        xaxis_title="성능 차이 (%)",
-        yaxis_title="쿼리 수",
-        height=400
-    )
+        fig_dist.update_layout(
+            title="AP@Avg 성능 차이 분포 (Model1 - Model2)",
+            xaxis_title="성능 차이 (%)",
+            yaxis_title="쿼리 수",
+            height=400
+        )
+        return fig_dist
+    
+    fig_dist = create_performance_distribution_plot(comparisons)
     st.plotly_chart(fig_dist, use_container_width=True)
     
     # 결과 필터링 및 정렬
@@ -918,12 +939,10 @@ def main():
     with col1:
         if st.button("⬅️ 이전", disabled=st.session_state.page <= 1):
             st.session_state.page -= 1
-            st.rerun()
     
     with col2:
         if st.button("⏮️ 처음"):
             st.session_state.page = 1
-            st.rerun()
     
     with col3:
         page_options = list(range(1, total_pages + 1))
@@ -938,17 +957,14 @@ def main():
         )
         if page != st.session_state.page:
             st.session_state.page = page
-            st.rerun()
     
     with col4:
         if st.button("⏭️ 마지막"):
             st.session_state.page = total_pages
-            st.rerun()
     
     with col5:
         if st.button("➡️ 다음", disabled=st.session_state.page >= total_pages):
             st.session_state.page += 1
-            st.rerun()
     
     # 현재 페이지 데이터
     start_idx = (st.session_state.page - 1) * items_per_page

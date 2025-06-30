@@ -15,14 +15,6 @@ import os
 # Add the parent directory to Python path to import from standalone_eval
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from standalone_eval.utils import compute_average_precision_detection, compute_temporal_iou_batch_cross, compute_temporal_iou_batch_paired
-def plot_temporal_visualization(pred_windows, gt_windows, duration, pred_saliency_scores, gt_data=None):
-    """시간축 기반 시각화"""
-    fig = make_subplots(
-        rows=4, cols=1,
-        subplot_titles=('Predicted Windows', 'Ground Truth Windows', 'Predicted Saliency Scores', 'Ground Truth Saliency Scores'),
-        vertical_spacing=0.12,
-        row_heights=[0.25, 0.25, 0.25, 0.25]
-    )
 
 st.set_page_config(
     page_title="QD-DETR Audio-Only Model Performance Viewer", 
@@ -185,8 +177,9 @@ def calculate_ap(pred_windows, gt_windows, iou_thresholds=None):
     
     return ap_results
 
+@st.cache_data
 def process_predictions(pred_data, gt_data):
-    """예측 데이터와 실제 데이터를 매칭하고 성능 지표 계산"""
+    """예측 데이터와 실제 데이터를 매칭하고 성능 지표 계산 (캐시됨)"""
     results = []
     
     # GT 데이터를 딕셔너리로 변환
@@ -269,8 +262,9 @@ def get_video_start_time(vid):
     return 0.0
 
 @st.cache_data
+@st.cache_data(ttl=3600)  # 1시간 캐시
 def translate_text(text, target_language='ko'):
-    """Google Translate를 사용하여 텍스트를 번역"""
+    """Google Translate를 사용하여 텍스트를 번역 (캐시됨)"""
     try:
         translator = Translator()
         result = translator.translate(text, dest=target_language)
@@ -278,8 +272,9 @@ def translate_text(text, target_language='ko'):
     except Exception as e:
         return f"번역 실패: {text}"
 
+@st.cache_data
 def plot_temporal_visualization(pred_windows, gt_windows, duration, pred_saliency_scores, gt_data=None):
-    """시간축 기반 시각화"""
+    """시간축 기반 시각화 (캐시됨)"""
     fig = make_subplots(
         rows=4, cols=1,
         subplot_titles=('Predicted Windows', 'Ground Truth Windows', 'Predicted Saliency Scores', 'Ground Truth Saliency Scores'),
