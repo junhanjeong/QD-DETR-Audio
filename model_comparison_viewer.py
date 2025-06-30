@@ -9,6 +9,12 @@ import time
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import sys
+import os
+
+# Add the parent directory to Python path to import from standalone_eval
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+from standalone_eval.utils import compute_average_precision_detection, compute_temporal_iou_batch_cross, compute_temporal_iou_batch_paired
 
 # 페이지 설정
 st.set_page_config(
@@ -107,17 +113,13 @@ def load_jsonl_data(file_path):
     return data
 
 def calculate_iou(pred_window, gt_window):
-    """두 윈도우 간의 IoU를 계산"""
+    """두 윈도우 간의 IoU를 계산 (eval.py와 동일한 방식)"""
     pred_start, pred_end = pred_window[0], pred_window[1]
     gt_start, gt_end = gt_window[0], gt_window[1]
     
-    # 교집합 계산
-    intersection_start = max(pred_start, gt_start)
-    intersection_end = min(pred_end, gt_end)
-    intersection = max(0, intersection_end - intersection_start)
-    
-    # 합집합 계산
-    union = (pred_end - pred_start) + (gt_end - gt_start) - intersection
+    # compute_temporal_iou_batch_paired와 동일한 로직
+    intersection = max(0, min(pred_end, gt_end) - max(pred_start, gt_start))
+    union = max(pred_end, gt_end) - min(pred_start, gt_start)
     
     if union == 0:
         return 0.0
@@ -125,70 +127,76 @@ def calculate_iou(pred_window, gt_window):
     return intersection / union
 
 def calculate_recall_at_1(pred_windows, gt_windows, iou_threshold=0.5):
-    """Recall@1 계산"""
+    """Recall@1 계산 (eval.py와 동일한 방식)"""
     if not gt_windows or not pred_windows:
         return 0.0
     
     # 상위 1개 예측 윈도우만 선택
-    top_pred = pred_windows[0]
+    top_pred = pred_windows[0][:2]  # [start, end]만 사용
     
-    # GT 윈도우 중 하나라도 IoU threshold를 넘는지 확인
-    for gt_window in gt_windows:
-        if calculate_iou(top_pred[:2], gt_window) >= iou_threshold:
-            return 1.0
+    # GT 윈도우들과 IoU 계산하여 최대값 구하기 (eval.py의 compute_mr_r1과 동일)
+    pred_array = np.array([top_pred])
+    gt_array = np.array(gt_windows)
+    ious = compute_temporal_iou_batch_cross(pred_array, gt_array)[0]
+    max_iou = np.max(ious)
     
-    return 0.0
+    return 1.0 if max_iou >= iou_threshold else 0.0
 
-def calculate_ap(pred_windows, gt_windows, iou_thresholds=[0.5, 0.75]):
-    """Average Precision 계산"""
+def calculate_ap_using_official_method(pred_windows, gt_windows, iou_thresholds=None):
+    """eval.py의 compute_average_precision_detection을 사용한 AP 계산"""
+    if iou_thresholds is None:
+        iou_thresholds = [0.5, 0.75]
+    
     if not gt_windows or not pred_windows:
         return {f'AP@{th}': 0.0 for th in iou_thresholds}
     
+    # 데이터를 eval.py format으로 변환
+    ground_truth = []
+    for i, gt_window in enumerate(gt_windows):
+        ground_truth.append({
+            'video-id': 'dummy_id',
+            't-start': gt_window[0],
+            't-end': gt_window[1]
+        })
+    
+    prediction = []
+    for pred_window in pred_windows:
+        prediction.append({
+            'video-id': 'dummy_id',
+            't-start': pred_window[0],
+            't-end': pred_window[1],
+            'score': pred_window[2] if len(pred_window) > 2 else 1.0
+        })
+    
     ap_results = {}
     
+    # 각 IoU threshold에 대해 AP 계산
     for iou_threshold in iou_thresholds:
-        # 각 예측에 대해 정답 여부 판단
-        scores = []
-        for pred_window in pred_windows:
-            score = pred_window[2] if len(pred_window) > 2 else 1.0
-            
-            # 이 예측이 GT와 매칭되는지 확인
-            is_correct = False
-            for gt_window in gt_windows:
-                if calculate_iou(pred_window[:2], gt_window) >= iou_threshold:
-                    is_correct = True
-                    break
-            
-            scores.append((score, is_correct))
-        
-        # 점수 순으로 정렬
-        scores.sort(key=lambda x: x[0], reverse=True)
-        
-        # Precision-Recall 계산
-        precisions = []
-        tp = 0
-        
-        for i, (score, is_correct) in enumerate(scores):
-            if is_correct:
-                tp += 1
-            
-            precision = tp / (i + 1)
-            precisions.append(precision)
-        
-        # AP 계산 (11-point interpolation)
-        ap = 0.0
-        for r in [0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0]:
-            max_precision = 0.0
-            for j, precision in enumerate(precisions):
-                recall = (j + 1) / len(gt_windows) if tp > 0 else 0.0
-                if recall >= r:
-                    max_precision = max(max_precision, precision)
-            ap += max_precision / 11
-        
-        ap_results[f'AP@{iou_threshold}'] = ap
+        ap_scores = compute_average_precision_detection(
+            ground_truth, 
+            prediction, 
+            tiou_thresholds=np.array([iou_threshold])
+        )
+        ap_results[f'AP@{iou_threshold}'] = ap_scores[0]
     
-    # AP Average 계산
-    ap_results['AP@Avg'] = np.mean(list(ap_results.values()))
+    return ap_results
+
+def calculate_ap(pred_windows, gt_windows, iou_thresholds=None):
+    """eval.py와 동일한 방식으로 AP 계산"""
+    if iou_thresholds is None:
+        iou_thresholds = [0.5, 0.75]
+    
+    # 기본 AP@0.5, AP@0.75 계산
+    ap_results = calculate_ap_using_official_method(pred_windows, gt_windows, iou_thresholds)
+    
+    # AP@Avg 계산 (0.5부터 0.95까지 10개 threshold의 평균)
+    if iou_thresholds == [0.5, 0.75]:  # 기본 호출인 경우에만 AP@Avg 계산
+        avg_thresholds = np.linspace(0.5, 0.95, 10)
+        ap_avg_results = calculate_ap_using_official_method(pred_windows, gt_windows, avg_thresholds)
+        avg_ap_values = [ap_avg_results[f'AP@{th}'] for th in avg_thresholds]
+        ap_results['AP@Avg'] = np.mean(avg_ap_values)
+    
+    return ap_results
     
     return ap_results
 
@@ -738,7 +746,7 @@ def main():
         # 파일 경로 설정
         model1_file = st.text_input(
             "🤖 모델 1 예측 파일:",
-            value="results/hl-audio_tef-audio_only_exp-2025_06_30_10_31_08/best_hl_val_preds.jsonl",
+            value="results/audio-seed2018/best_hl_val_preds.jsonl",
             help="모델 1의 예측 결과 파일 경로"
         )
         
@@ -750,13 +758,13 @@ def main():
         
         model2_file = st.text_input(
             "🤖 모델 2 예측 파일:",
-            value="results/hl-video_tef-exp-2025_06_30_01_07_56/best_hl_val_preds.jsonl",
+            value="results/both-seed2018/best_hl_val_preds.jsonl",
             help="모델 2의 예측 결과 파일 경로"
         )
         
         model2_name = st.text_input(
             "📝 모델 2 이름:",
-            value="Video Model",
+            value="Video_Audio Model",
             help="모델 2의 표시 이름"
         )
         
