@@ -22,7 +22,7 @@ v_feat_dirs=()
 
 # text features
 if [[ ${t_feat_type} == "clip" ]]; then
-  t_feat_dir=${feat_root}/umt_clip_text_features/
+  t_feat_dir=${feat_root}/clip_text_features/
   t_feat_dim=512
 else
   echo "Wrong arg for t_feat_type."
@@ -31,7 +31,7 @@ fi
 
 # audio features
 if [[ ${a_feat_type} == "pann" ]]; then
-  a_feat_dir=${feat_root}/umt_pann_features/
+  a_feat_dir=${feat_root}/pann_features/
   a_feat_dim=2050
 else
   echo "Wrong arg for a_feat_type."

@@ -16,6 +16,8 @@ from qd_detr.span_utils import span_cxw_to_xx
 from qd_detr.start_end_dataset import StartEndDataset, start_end_collate, prepare_batch_inputs
 from qd_detr.start_end_dataset_audio import \
     StartEndDataset_audio, start_end_collate_audio, prepare_batch_inputs_audio
+from qd_detr.start_end_dataset_umt import \
+    StartEndDataset_UMT, start_end_collate_umt, prepare_batch_inputs_umt
 from qd_detr.postprocessing_qd_detr import PostProcessorDETR
 from standalone_eval.eval import eval_submission
 from utils.basic_utils import save_jsonl, save_json
@@ -103,7 +105,10 @@ def compute_hl_results(model, eval_loader, opt, epoch_i=None, criterion=None, tb
     video_ap_collected = []
     for batch in tqdm(eval_loader, desc="compute st ed scores"):
         query_meta = batch[0]
-        if opt.a_feat_dir is None:
+        # Check if using UMT dataset
+        if hasattr(eval_loader.dataset, '__class__') and 'UMT' in eval_loader.dataset.__class__.__name__:
+            model_inputs, targets = prepare_batch_inputs_umt(batch[1], opt.device, non_blocking=opt.pin_memory)
+        elif opt.a_feat_dir is None:
             model_inputs, targets = prepare_batch_inputs(batch[1], opt.device, non_blocking=opt.pin_memory)
         else:
             model_inputs, targets = prepare_batch_inputs_audio(batch[1], opt.device, non_blocking=opt.pin_memory)
@@ -184,7 +189,10 @@ def compute_mr_results(model, eval_loader, opt, epoch_i=None, criterion=None, tb
     mr_res = []
     for batch in tqdm(eval_loader, desc="compute st ed scores"):
         query_meta = batch[0]
-        if opt.a_feat_dir is None:
+        # Check if using UMT dataset
+        if hasattr(eval_loader.dataset, '__class__') and 'UMT' in eval_loader.dataset.__class__.__name__:
+            model_inputs, targets = prepare_batch_inputs_umt(batch[1], opt.device, non_blocking=opt.pin_memory)
+        elif opt.a_feat_dir is None:
             model_inputs, targets = prepare_batch_inputs(batch[1], opt.device, non_blocking=opt.pin_memory)
         else:
             model_inputs, targets = prepare_batch_inputs_audio(batch[1], opt.device, non_blocking=opt.pin_memory)
@@ -270,7 +278,18 @@ def eval_epoch(model, eval_dataset, opt, save_submission_filename, epoch_i=None,
     else:
         criterion = None
 
-    if opt.a_feat_dir is None:
+    # Check dataset type and use appropriate collate function
+    if hasattr(eval_dataset, '__class__') and 'UMT' in eval_dataset.__class__.__name__:
+        # UMT dataset
+        eval_loader = DataLoader(
+            eval_dataset,
+            collate_fn=start_end_collate_umt,
+            batch_size=opt.eval_bsz,
+            num_workers=opt.num_workers,
+            shuffle=False,
+            pin_memory=opt.pin_memory
+        )
+    elif opt.a_feat_dir is None:
         eval_loader = DataLoader(
             eval_dataset,
             collate_fn=start_end_collate,

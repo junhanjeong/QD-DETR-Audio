@@ -137,6 +137,14 @@ class BaseOptions(object):
                             help="Relative classification weight of the no-object class")
         parser.add_argument("--contrastive_align_loss_coef", default=0.0, type=float)
 
+        # UMT-specific parameters
+        parser.add_argument("--umt_hidden_dim", type=int, default=256,
+                            help="Hidden dimension for UMT components")
+        parser.add_argument("--umt_num_tokens", type=int, default=4,
+                            help="Number of bottleneck tokens in UMT")
+        parser.add_argument("--umt_num_layers", type=int, default=1,
+                            help="Number of UMT transformer layers")
+        
         parser.add_argument("--no_sort_results", action="store_true",
                             help="do not sort results, use this for moment query visualization")
         parser.add_argument("--max_before_nms", type=int, default=10)
